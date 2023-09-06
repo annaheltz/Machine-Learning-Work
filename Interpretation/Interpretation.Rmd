@@ -1,0 +1,521 @@
+---
+title: "Interpretation"
+author: "Anna Heltz"
+date: "2022-12-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE }
+library(tidyverse)
+library(caret)
+library(carat)
+library(glmnet)
+library(e1071) 
+library(caTools) 
+library(dplyr)
+library(ggplot2)
+library(yardstick)
+library(randomForest)
+library(xgboost)
+library(readr)
+```
+
+```{r}
+DF <- readr::read_csv("fall2022_finalproject.csv", col_names = TRUE)
+```
+
+```{r}
+testSet <- readr::read_csv("fall2022_holdout_inputs.csv", col_names = TRUE)
+```
+
+
+
+----------------------------
+Creating the DF in this file
+----------------------------
+
+```{r}
+newDF <- DF %>% 
+  mutate(x5 = 1 - (x1 + x2 + x3 + x4),
+         w = x2 / (x3 + x4),
+         z = (x1 + x2) / (x5 + x4),
+         t = v1 * v2,
+         outcome = ifelse(output < 0.33, 'event', 'non_event'),
+         outcome = factor(outcome, levels = c("event", "non_event")),
+          y = boot::logit(output),
+         y1 = ifelse(outcome=="event",1,0))  
+```
+
+
+----------------------------
+**Altering the Test Set**
+----------------------------
+
+```{r}
+testSet <- testSet %>% 
+  mutate(x5 = 1 - (x1 + x2 + x3 + x4),
+         w = x2 / (x3 + x4),
+         z = (x1 + x2) / (x5 + x4),
+         t = v1 * v2)  
+
+glimpse(testSet)
+```
+
+
+------------------------------------------
+**Objectives**
+------------------------------------------
+You must predict the logit-transformed continuous response and the binary outcome using this test set
+  • You must select 1 regression model and 1 classification model.
+  • You must predict the continuous output.
+  • You must predict the probability of the event.
+  • You must classify the binary outcome assuming a default threshold of 0.5. 
+  
+  
+------------------------------------------
+**First, lets recap our best models.**
+------------------------------------------ 
+```{r}
+my_ctrl <- trainControl(method = 'cv', number = 5,
+                             summaryFunction = twoClassSummary,
+                             classProbs = TRUE,
+                             savePredictions = TRUE)
+my_metric <- "ROC"
+```
+  
+# From Classification iiiD, the best model with the ROC Metric, maximizing the Area Under the ROC Curve (ROC AUC): The XGB with Derived Features
+```{r}
+set.seed(2021)
+linearBasisMod3TrainC <- train(outcome ~ splines::ns(x1, 5) * (I(x2^2)) * (I(x3^2))+ t + z + w,
+                       data = newDF,
+                   method = 'glm',
+                   metric = my_metric,
+                   preProcess = c("center", "scale"),
+                   trControl = my_ctrl)
+```
+
+# From Classification iiiD, the best model based on maximizing accuracy: The Random Forest with Base Features
+```{r}
+set.seed(2021)
+rf_base <- train(outcome~x1+x2+x3+x4+v1+v2+v3+v4+v5+m, 
+                        method = 'rf',
+                        metric = my_metric,
+                        trControl = my_ctrl,
+                        data = newDF,
+                        importance = TRUE)
+```
+
+```{r}
+my_ctrl <- trainControl(
+  method = 'cv',
+  number = 5,
+  savePredictions = TRUE
+)
+
+my_metric <- "RMSE"
+
+# Making our train/test split of the data 
+
+mod_df <- newDF %>% mutate(id=1:nrow(newDF))
+df_train <- mod_df%>% dplyr::sample_frac(.70)
+df_test <- dplyr::anti_join(mod_df,df_train,by="id")
+
+df_test <- subset(df_test, select = -c(id))
+df_train <- subset(df_train, select = -c(id))
+```
+
+
+# From Regression iiD, the best model by RMSE
+```{r}
+set.seed(2021)
+
+
+tune_grid <- expand.grid(size = c(3,6,9,12,15), 
+                          decay = exp(seq(-6,0,length.out=11)))
+
+nnet_base<-  caret::train(y ~ x1+x2+x3+x4+v1+v2+v3+v4+v5+m, 
+                          data = df_train, 
+                          method='nnet',
+                          metric=my_metric,
+                          preProcess=c('center', 'scale'),
+                          trControl=my_ctrl,linout = TRUE,
+                          maxiter = 501,trace = FALSE,
+                          tuneGrid=tune_grid )
+```
+
+# From Regression iiD, the second best model by RMSE
+
+```{r}
+set.seed(2021)
+linearBasisMod3Train <- train(y ~ splines::ns(x1, 5) * (I(x2^2)) * (I(x3^2))+ t + z + w,
+                       data = df_train,
+                   method = 'lm',
+                   metric = my_metric,
+                   preProcess = c("center", "scale"),
+                   trControl = my_ctrl)
+```
+
+------------------------------------------
+**Does the model performance improve when the derived features in the “expanded feature” set are included?**
+------------------------------------------ 
+Based on my best models, I do not believe that the models improve when the derived features in the “expanded feature” set are included. This is because in the classification visual, where I compare all of the trained models. In almost all of the cases, the models that do not include the expanded feature set out-perform the models that include the expanded feature set. In regression as well, in almost all of the cases, the models that do not include the expanded feature set out-perform the models that include the expanded feature set.
+
+
+------------------------------------------
+**Identify the most important variables associated with your best performing models**
+------------------------------------------ 
+I would say m, z, x1, x2, and x3 are some of the most important variables. This is because most of the variables are in all of these best performing models.
+
+
+
+------------------------------------------
+**Visualize the predicted logit-transformed response as a function of your identified most important variables**
+------------------------------------------ 
+
+# LinearMod3 Predictions
+```{r}
+linearMod3Pred <- predict(linearBasisMod3Train , testSet)
+linearMod3PredY <- as.vector(linearMod3Pred)
+testSetLinearMod3Pred <- testSet
+testSetLinearMod3Pred$y <- linearMod3PredY
+testSetLinearMod3Pred$output <- exp(linearMod3PredY)/(1+exp(linearMod3PredY))
+
+testSetLinearMod3Pred <- testSetLinearMod3Pred %>% mutate(outcome = ifelse(output < .5, 'event', 'non_event'),
+         outcome = factor(outcome, levels = c("event", "non_event")))
+testSetLinearMod3Pred
+```
+
+## Logit-transformed response as a function of x1, x2,x3 and z, with the linearmod3 predictions
+```{r}
+testSetLinearMod3Pred%>% ggplot(mapping = aes(x = x1)) +
+  geom_line(mapping = aes(y = y,color=m))+
+  facet_wrap(~m)
+
+testSetLinearMod3Pred%>% ggplot(mapping = aes(x = x2)) +
+  geom_line(mapping = aes(y = y,color=m))+
+  facet_wrap(~m)
+
+testSetLinearMod3Pred%>% ggplot(mapping = aes(x = x3)) +
+  geom_line(mapping = aes(y = y,color=m)) +
+  facet_wrap(~m)
+
+testSetLinearMod3Pred%>% ggplot(mapping = aes(x = z)) +
+  geom_line(mapping = aes(y = y,color=m)) +
+  facet_wrap(~m)
+```
+
+```{r}
+testSetLinearMod3Pred %>% 
+  ggplot(mapping = aes(y = x1)) +
+  geom_point(mapping = aes(x =x2, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+testSetLinearMod3Pred %>% 
+  ggplot(mapping = aes(y = x3)) +
+  geom_point(mapping = aes(x =x2, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+testSetLinearMod3Pred %>% 
+  ggplot(mapping = aes(y = x1)) +
+  geom_point(mapping = aes(x =x3, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+testSetLinearMod3Pred %>% 
+  ggplot(mapping = aes(y = x1)) +
+  geom_point(mapping = aes(x =z, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+testSetLinearMod3Pred %>% 
+  ggplot(mapping = aes(y = x2)) +
+  geom_point(mapping = aes(x =z, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+testSetLinearMod3Pred %>% 
+  ggplot(mapping = aes(y = x3)) +
+  geom_point(mapping = aes(x = z, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+```
+
+
+
+```{r}
+data_range_lin_x <- testSetLinearMod3Pred %>% 
+  select(-v1,-v2,-v3,-v4,-v5,-t,-z,-w,-output,-y) %>%
+  select(-outcome) %>%
+  tibble::rowid_to_column() %>%
+  pivot_longer(!c("rowid", "m"))
+data_range_lin_v <- testSetLinearMod3Pred %>% 
+  select(-x1,-x2,-x3,-x4,-x5,-t,-z,-w,-output,-y) %>%
+  select(-outcome) %>%
+  tibble::rowid_to_column() %>%
+  pivot_longer(!c("rowid", "m"))
+data_range_lin_tzw <- testSetLinearMod3Pred %>% 
+  select(-v1,-v2,-v3,-v4,-v5,-x1,-x2,-x3,-x4,-x5,-output,-y) %>%
+  select(-outcome) %>%
+  tibble::rowid_to_column() %>%
+  pivot_longer(!c("rowid", "m"))
+data_range_lin_output <- testSetLinearMod3Pred %>% 
+  select(-v1,-v2,-v3,-v4,-v5,-x1,-x2,-x3,-x4,-x5,-t,-z,-w,-y) %>%
+  select(-outcome) %>%
+  tibble::rowid_to_column() %>%
+  pivot_longer(!c("rowid", "m"))
+```
+
+```{r}
+data_range_lin_x %>%
+  ggplot(mapping = aes(x = m, y = value, color = m)) +
+  geom_boxplot() +
+  facet_wrap(~name, scales = 'free')
+data_range_lin_v %>%
+  ggplot(mapping = aes(x = m, y = value, color = m)) +
+  geom_boxplot() +
+  facet_wrap(~name, scales = 'free')
+data_range_lin_tzw %>%
+  ggplot(mapping = aes(x = m, y = value, color = m)) +
+  geom_boxplot() +
+  facet_wrap(~name, scales = 'free')
+data_range_lin_output %>%
+  ggplot(mapping = aes(x = m, y = value, color = m)) +
+  geom_boxplot() +
+  facet_wrap(~name, scales = 'free')
+```
+
+
+
+
+
+
+# Neural Network with Base Features Predictions
+```{r}
+nnet_basePred <- predict(nnet_base , testSet)
+nnet_basePredY <- as.vector(nnet_basePred)
+testSet_nnet_basePred <- testSet
+testSet_nnet_basePred$y <- nnet_basePredY
+testSet_nnet_basePred$output <- exp(nnet_basePredY)/(1+exp(nnet_basePredY))
+testSet_nnet_basePred <- testSet_nnet_basePred %>% mutate(outcome = ifelse(output < .5, 'event', 'non_event'),
+         outcome = factor(outcome, levels = c("event", "non_event")))
+testSet_nnet_basePred
+```
+## Logit-transformed response as a function of x1,x2,x3, and z
+```{r}
+testSet_nnet_basePred%>% ggplot(mapping = aes(x = x1)) +
+  geom_line(mapping = aes(y = y,color=m)) +
+  facet_wrap(~m)
+
+testSet_nnet_basePred%>% ggplot(mapping = aes(x = x2)) +
+  geom_line(mapping = aes(y = y,color=m)) +
+  facet_wrap(~m)
+
+testSet_nnet_basePred%>% ggplot(mapping = aes(x = x3)) +
+  geom_line(mapping = aes(y = y,color=m)) +
+  facet_wrap(~m)
+
+testSet_nnet_basePred%>% ggplot(mapping = aes(x = z)) +
+  geom_line(mapping = aes(y = y,color=m)) +
+  facet_wrap(~m)
+```
+
+```{r}
+testSet_nnet_basePred %>% 
+  ggplot(mapping = aes(y = x1)) +
+  geom_point(mapping = aes(x =x2, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+testSet_nnet_basePred %>% 
+  ggplot(mapping = aes(y = x3)) +
+  geom_point(mapping = aes(x =x2, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+testSet_nnet_basePred %>% 
+  ggplot(mapping = aes(y = x1)) +
+  geom_point(mapping = aes(x =x3, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+testSet_nnet_basePred %>% 
+  ggplot(mapping = aes(y = x1)) +
+  geom_point(mapping = aes(x =z, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+testSet_nnet_basePred %>% 
+  ggplot(mapping = aes(y = x2)) +
+  geom_point(mapping = aes(x =z, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+testSet_nnet_basePred %>% 
+  ggplot(mapping = aes(y = x3)) +
+  geom_point(mapping = aes(x = z, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+```
+
+```{r}
+data_range_nnet_x <- testSet_nnet_basePred %>% 
+  select(-v1,-v2,-v3,-v4,-v5,-t,-z,-w,-output,-y) %>%
+  select(-outcome) %>%
+  tibble::rowid_to_column() %>%
+  pivot_longer(!c("rowid", "m"))
+data_range_nnet_v <- testSet_nnet_basePred %>% 
+  select(-x1,-x2,-x3,-x4,-x5,-t,-z,-w,-output,-y) %>%
+  select(-outcome) %>%
+  tibble::rowid_to_column() %>%
+  pivot_longer(!c("rowid", "m"))
+data_range_nnet_tzw <- testSet_nnet_basePred %>% 
+  select(-v1,-v2,-v3,-v4,-v5,-x1,-x2,-x3,-x4,-x5,-output,-y) %>%
+  select(-outcome) %>%
+  tibble::rowid_to_column() %>%
+  pivot_longer(!c("rowid", "m"))
+data_range_nnet_output <- testSet_nnet_basePred %>% 
+  select(-v1,-v2,-v3,-v4,-v5,-x1,-x2,-x3,-x4,-x5,-t,-z,-w,-y) %>%
+  select(-outcome) %>%
+  tibble::rowid_to_column() %>%
+  pivot_longer(!c("rowid", "m"))
+```
+
+```{r}
+data_range_nnet_x %>%
+  ggplot(mapping = aes(x = m, y = value, color = m)) +
+  geom_boxplot() +
+  facet_wrap(~name, scales = 'free')
+data_range_nnet_v %>%
+  ggplot(mapping = aes(x = m, y = value, color = m)) +
+  geom_boxplot() +
+  facet_wrap(~name, scales = 'free')
+data_range_nnet_tzw %>%
+  ggplot(mapping = aes(x = m, y = value, color = m)) +
+  geom_boxplot() +
+  facet_wrap(~name, scales = 'free')
+data_range_nnet_output %>%
+  ggplot(mapping = aes(x = m, y = value, color = m)) +
+  geom_boxplot() +
+  facet_wrap(~name, scales = 'free')
+```
+
+
+------------------------------------------
+**Visualize the predicted probability of the EVENT as a function of your identified most important variables**
+------------------------------------------ 
+
+## Random Forest with Base Features Predictions
+```{r}
+rf_basePred <- predict(rf_base , testSet)
+rf_basePredY <- as.vector(rf_basePred)
+testSet_rf_basePred <- testSet
+testSet_rf_basePred$outcome <- rf_basePredY
+testSet_rf_basePred
+```
+
+```{r}
+testSet_rf_basePred %>% 
+  ggplot(mapping = aes(y = x1)) +
+  geom_point(mapping = aes(x =x2, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+testSet_rf_basePred %>% 
+  ggplot(mapping = aes(y = x3)) +
+  geom_point(mapping = aes(x =x2, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+testSet_rf_basePred %>% 
+  ggplot(mapping = aes(y = x1)) +
+  geom_point(mapping = aes(x =x3, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+testSet_rf_basePred %>% 
+  ggplot(mapping = aes(y = x1)) +
+  geom_point(mapping = aes(x =z, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+testSet_rf_basePred %>% 
+  ggplot(mapping = aes(y = x2)) +
+  geom_point(mapping = aes(x =z, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+testSet_rf_basePred %>% 
+  ggplot(mapping = aes(y = x3)) +
+  geom_point(mapping = aes(x = z, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+```
+
+## linearBasisMod3TrainC with Base Features Predictions
+```{r}
+linearBasisMod3TrainC_Pred <- predict(linearBasisMod3TrainC , testSet)
+linearBasisMod3TrainCPredY <- as.vector(linearBasisMod3TrainC_Pred)
+linearBasisMod3TrainC_test <- testSet
+linearBasisMod3TrainC_test$outcome <- linearBasisMod3TrainCPredY
+linearBasisMod3TrainC_test
+```
+
+```{r}
+linearBasisMod3TrainC_test %>% 
+  ggplot(mapping = aes(y = x1)) +
+  geom_point(mapping = aes(x =x2, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+linearBasisMod3TrainC_test %>% 
+  ggplot(mapping = aes(y = x3)) +
+  geom_point(mapping = aes(x =x2, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+linearBasisMod3TrainC_test %>% 
+  ggplot(mapping = aes(y = x1)) +
+  geom_point(mapping = aes(x =x3, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+linearBasisMod3TrainC_test %>% 
+  ggplot(mapping = aes(y = x1)) +
+  geom_point(mapping = aes(x =z, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+linearBasisMod3TrainC_test %>% 
+  ggplot(mapping = aes(y = x2)) +
+  geom_point(mapping = aes(x =z, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+
+linearBasisMod3TrainC_test %>% 
+  ggplot(mapping = aes(y = x3)) +
+  geom_point(mapping = aes(x = z, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+```
+
+-------------------------------------------
+**Based on your visualizations, what input settings are associated with minimizing the logit-transformed response**
+-------------------------------------------
+When x1 is between .4-.6 and x2 is between 0-0.2, there are a lot of *non-events*.
+When x3 is between .3-.5 and z is between 0-2, there are a lot of events!
+When x2 is between .2-.25 and z is between 1-3, there are a lot of events!
+When x1 is between .1-.3 and z is between 0-3, there are a lot of events!
+When x1 is between .1-.3 and z is between 0-5, there are a lot of events!
+Machine D has the lowest average predicted output. Maybe it is the best machine.
+Optimal settings: x1=.25,x2=.07,x3=.25,x4=.05,x5=.2.
+v1=5,v2=.5,v3=5,v4=.5,v5=7.t=2,w=.35,z=1.6
+
+
+-------------------------------------------
+**Do the optimal input settings vary across the values of the categorical variable?**
+-------------------------------------------
+The optimal input settings to do not seem to vary that much across the values of the categorical input.
+
+-------------------------------------------
+**Compiling our predictions into a tibble**
+-------------------------------------------
+```{r}
+predictionsDF <- testSetLinearMod3Pred %>% tibble::rowid_to_column()
+predictionsDF <- predictionsDF %>% mutate(id=rowid,probability=output) 
+predictionsDF <- predictionsDF %>% select(-rowid,-output)
+predictionsDF <- predictionsDF %>% select(id,y,outcome,probability)
+predictionsDF
+
+testSet_nnet_basePred <- testSet_nnet_basePred %>% tibble::rowid_to_column()
+testSet_nnet_basePred <- testSet_nnet_basePred %>% mutate(id=rowid+217,probability=output) 
+testSet_nnet_basePred <- testSet_nnet_basePred %>% select(-rowid,-output)
+testSet_nnet_basePred <- testSet_nnet_basePred %>% select(id,y,outcome,probability)
+predictionsDF <- predictionsDF %>% rbind(testSet_nnet_basePred)
+predictionsDF
+
+
+write.csv(predictionsDF, "C:\\Users\\annah\\OneDrive\\Desktop\\Fall_2022\\CS_1675\\Final\\Intepretation\\predictionsDF.csv", row.names=FALSE)
+```
+

@@ -1,0 +1,302 @@
+---
+title: 'Part 1: Exploration of the V inputs'
+author: "Anna Heltz"
+date: "2022-11-10"
+output: html_document
+---
+
+Anna Heltz
+Part 1: Exploration 
+Exploration into the V inputs
+
+This file will focus on part 1 of the project: the exploratory section. 
+I will attempt to visualize the output for the fraction of the corroded surface, with respect to the inputs: v1 -v5, and the other derived inputs. The ultimate goal will be to develop some amazing models that can tell us what combination of manufactured and chemical inputs will produce the least amount of corroded surface, but first we need to *understand* our data. 
+
+
+First, let's load in the file and our tidyverse package.
+
+**Loading and Modifying Data**
+-----------------------------------------------------------------------------------------------------------------------------
+
+```{r, include = FALSE }
+library(tidyverse)
+```
+
+```{r}
+DF <- readr::read_csv("fall2022_finalproject.csv", col_names = TRUE)
+```
+
+
+
+Now let's take a peek at the data to begin to look at how it is formatted. 
+
+```{r}
+DF %>% glimpse()
+```
+
+Looks like the test data has 1250 or samples. 
+ 
+
+v1, v2, v3, v4, and v5 are the *manufacturing inputs*
+- These are similar to the chemistry inputs in how they are formatted. A few derived features I will introduce momentarily come from these manufacturing inputs. 
+
+The one *categorical input* is m, which corresponds to a different machine the coating was produced in. 
+- We will probably need to make some interactive models involving m. 
+
+Time To introduce our derived features.
+
+*x5*: The balance constituent between all the other chemical inputs (still investigating)
+*w*: Ratio of x2 to x3 and x4
+*z*: a ratio between all chemical constituents, particularly the first 2 over x5 + x4 (need to investigate further)
+*t*: Product of first 2 manufacturing inputs
+*binary classification*:  Classifying an event as a third or less of the surface being corroded, classification is a secondary goal of the project. 
+**NOTE on LOGIT Transformation**: Added a y column because are regression models should be based on the unbounded output, not the percentage of corroded surface bounded between 0 and 1. 
+
+```{r}
+newDF <- DF %>% 
+  mutate(x5 = 1 - (x1 + x2 + x3 + x4),
+         w = x2 / (x3 + x4),
+         z = (x1 + x2) / (x5 + x4),
+         t = v1 * v2,
+         outcome = ifelse(output < 0.33, 'event', 'non_event'),
+         outcome = factor(outcome, levels = c("event", "non_event")),
+          y = boot::logit(output))
+
+glimpse(newDF)   
+```
+
+
+----------------------------------------------------------------------------------------------------------------------------
+
+**Starting exploration based on the chemical inputs**
+Visualize the relationships between the responses (output and the logit-transformed
+response) with respect to the inputs (“base features” and derived features)
+----------------------------------------------------------------------------------------------------------------------------
+
+First, let's take a look at how each v input corresponds to the output, independently
+
+
+```{r}
+newDF %>% 
+  ggplot(mapping = aes(y = y)) +
+  geom_point(mapping = aes(x =v1, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+ 
+```
+Based on this graph, it seems like all the events have negative logit values ranging from slightly below 0 to -5, AND a dense amount of them occur when x1 is equals .2 to .3. This trend is similar between all m machines, but there seems to be a lot of events on machine D when x1 is around .2 in particular. 
+
+Lets continue these visualizations for all the other inputs
+
+
+```{r}
+newDF %>% 
+  ggplot(mapping = aes(y = y)) +
+  geom_point(mapping = aes(x =v2, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+ 
+```
+
+```{r}
+newDF %>% 
+  ggplot(mapping = aes(y = y)) +
+  geom_point(mapping = aes(x =v3, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+ 
+```
+
+```{r}
+newDF %>% 
+  ggplot(mapping = aes(y = y)) +
+  geom_point(mapping = aes(x = v4, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+```
+
+```{r}
+newDF %>% 
+  ggplot(mapping = aes(y = y)) +
+  geom_point(mapping = aes(x = v5, color = outcome), alpha = .33) + 
+  facet_grid(~m)
+```
+
+
+
+
+
+
+
+**OVERALL INGREDIENT CONCLUSIONS**
+The only real helpful conclusion I drew was when I graphed z and realized that high values of x5 and x4 produce more events (less corrosion), but this still requires further investigation. 
+
+
+
+Are there differences in input values based on the discrete groups?
+- Yes there are differences in the range of input values for some of the discrete groups. The ranges for the input values for x1-x5 are similar. The ranges of the input values for v5,v3,v1 and t are similar.
+
+
+Are there differences in output based on the discrete groups?
+- As you can see the graphs look very similar between the continuous variables x1,x2,x3,x4,x5.
+
+
+**Visualizing distributions**
+----------------------------------------------------------------------------------------------------------------------------
+
+```{r}
+newDF %>% 
+  ggplot(mapping = aes(x = output)) +
+  geom_histogram(bins = 50) 
+```
+
+Woah!! look at how many paint samples corroded almost completely (last bin of .98 to 1), can we learn more about what the chemistry inputs were when this happened. 
+
+
+
+---------- Eliminating Ranges for v1-v5 based on the highly corroded values ---------------------
+
+
+```{r}
+DF_corroded <- newDF %>% filter(output >= .98)
+DF_corroded
+DF_corroded %>% ggplot() +
+  geom_point(mapping = aes(x=v1,y=y))
+
+```
+```{r}
+DF_corroded %>% ggplot() +
+  geom_point(mapping = aes(x=v2,y=y))
+```
+```{r}
+DF_corroded %>% ggplot() +
+  geom_point(mapping = aes(x=v3,y=y))
+```
+```{r}
+DF_corroded %>% ggplot() +
+  geom_point(mapping = aes(x=v4,y=y))
+```
+```{r}
+DF_corroded %>% ggplot() +
+  geom_point(mapping = aes(x=v5,y=y))
+```
+
+
+
+There are not many conclusions we can draw from graphing each v input on the highly corroded samples.
+
+
+
+
+
+---------------------------------------------------------------------------------------------------------------------------
+
+**Identifying the best m**
+
+---------------------------------------------------------------------------------------------------------------------------
+```{r}
+eventsA <- newDF %>% filter(m == "A") %>% filter(outcome == "event")
+eventsB <- newDF %>% filter(m == "B") %>% filter(outcome == "event")
+eventsC <- newDF %>% filter(m == "C" ) %>% filter(outcome == "event")
+eventsD <- newDF %>% filter(m == "D" ) %>% filter(outcome == "event")
+eventsE <- newDF %>% filter(m == "E" ) %>% filter(outcome == "event")
+noneventsA <- newDF %>% filter(m == "A" ) %>% filter(outcome == "non_event")
+noneventsB <- newDF %>% filter(m == "B" ) %>% filter(outcome == "non_event")
+noneventsC <- newDF %>% filter(m == "C" ) %>% filter( outcome == "non_event")
+noneventsD <- newDF %>% filter(m == "D" ) %>% filter( outcome == "non_event")
+noneventsE <- newDF %>% filter(m == "E" ) %>% filter( outcome == "non_event")
+  
+ratioA <- count(eventsA)/(count(eventsA) + count(noneventsA))
+cat("Ratio of Events from Machine A:",ratioA[[1]])
+ratioB <- count(eventsB)/(count(eventsB) + count(noneventsB))
+cat("\nRatio of Events from Machine B:",ratioB[[1]])
+ratioC <- count(eventsC)/(count(eventsC) + count(noneventsC))
+cat("\nRatio of Events from Machine C:",ratioC[[1]])
+ratioD <- count(eventsD)/(count(eventsD) + count(noneventsD))
+cat("\nRatio of Events from Machine D:",ratioD[[1]])
+ratioE <- count(eventsE)/(count(eventsE) + count(noneventsE))
+cat("\nRatio of Events from Machine E:",ratioE[[1]])
+```
+
+---------------------------------------------------------------------------------------------------------------------------
+As you can see, machine D produces the best ratio of events to non-events compared to the other four machines. 
+
+However, since there are clearly very different chemical and engineering ingredients for each sample, this conclusion must be taken with a grain of salt. **NOTE**: Should explore interactive models later on. 
+
+
+
+
+
+-----------------------------------------------------------------------------------------
+Visualizing between the base features and the derived features
+-----------------------------------------------------------------------------
+Base features and z
+--------------------------------------------
+
+```{r}
+newDF %>% ggplot(mapping = aes(x=v1,y=z))+
+  geom_line()
+```
+```{r}
+newDF %>% ggplot(mapping = aes(x=v2,y=z))+
+  geom_line()
+```
+```{r}
+newDF %>% ggplot(mapping = aes(x=v3,y=z))+
+  geom_line()
+```
+```{r}
+newDF %>% ggplot(mapping = aes(x=v4,y=z))+
+  geom_line()
+```
+```{r}
+newDF %>% ggplot(mapping = aes(x=v5,y=z))+
+  geom_line()
+```
+
+
+
+--------------------------------------------------------------
+Base features and w
+--------------------------------------
+```{r}
+newDF %>% ggplot(mapping = aes(x=v1,y=w))+
+  geom_line()
+```
+```{r}
+newDF %>% ggplot(mapping = aes(x=v2,y=w))+
+  geom_line()
+```
+```{r}
+newDF %>% ggplot(mapping = aes(x=v3,y=w))+
+  geom_line()
+```
+```{r}
+newDF %>% ggplot(mapping = aes(x=v4,y=w))+
+  geom_line()
+```
+```{r}
+newDF %>% ggplot(mapping = aes(x=v5,y=w))+
+  geom_line()
+```
+
+--------------------------------------------------------------
+Base features and t
+--------------------------------------
+```{r}
+newDF %>% ggplot(mapping = aes(x=v1,y=t))+
+  geom_line()
+```
+```{r}
+newDF %>% ggplot(mapping = aes(x=v2,y=t))+
+  geom_line()
+```
+```{r}
+newDF %>% ggplot(mapping = aes(x=v3,y=t))+
+  geom_line()
+```
+```{r}
+newDF %>% ggplot(mapping = aes(x=v4,y=t))+
+  geom_line()
+```
+```{r}
+newDF %>% ggplot(mapping = aes(x=v5,y=t))+
+  geom_line()
+```
+There are no notable relationships between the v inputs and the derived features.

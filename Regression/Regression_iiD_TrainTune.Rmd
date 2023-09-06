@@ -1,0 +1,381 @@
+---
+title: "Regression iiD"
+author: "Anna Heltz"
+date: "2022-12-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE }
+library(tidyverse)
+library(caret)
+library(carat)
+library(glmnet)
+library(e1071) 
+library(caTools) 
+library(dplyr)
+library(ggplot2)
+library(yardstick)
+library(randomForest)
+library(xgboost)
+```
+
+```{r}
+DF <- readr::read_csv("fall2022_finalproject.csv", col_names = TRUE)
+```
+
+-------------------------
+creating the DF in this file
+----------------------------
+
+```{r}
+newDF <- DF %>% 
+  mutate(x5 = 1 - (x1 + x2 + x3 + x4),
+         w = x2 / (x3 + x4),
+         z = (x1 + x2) / (x5 + x4),
+         t = v1 * v2,
+         outcome = ifelse(output < 0.33, 'event', 'non_event'),
+         outcome = factor(outcome, levels = c("event", "non_event")),
+          y = boot::logit(output))  
+```
+
+
+# Making our train/test split of the data 
+
+```{r}
+mod_df <- newDF %>% mutate(id=1:nrow(newDF))
+df_train <- mod_df%>% dplyr::sample_frac(.70)
+df_test <- dplyr::anti_join(mod_df,df_train,by="id")
+
+df_test <- subset(df_test, select = -c(id))
+df_train <- subset(df_train, select = -c(id))
+```
+
+---------------------------------------------
+Lets train the models now, we will specify the performance metric to be RMSE because these are regression models!
+---------------------------------------------
+
+**Linear Models!**
+
+```{r}
+my_ctrl <- trainControl(
+  method = 'cv',
+  number = 5,
+  savePredictions = TRUE
+)
+
+my_metric <- "RMSE"
+```
+
+```{r}
+set.seed(2021)
+additiveDerivedTrain <- train(y~x5+w+z+t+v1+v2+v3+v4+v5+m, 
+                                  data = df_train,
+                   method = 'lm',
+                   metric = my_metric,
+                   preProcess = c("center", "scale"),
+                   trControl = my_ctrl)
+```
+
+```{r}
+set.seed(2021)
+additiveBaseTrain <- train(y~x1+x2+x3+x4+v1+v2+v3+v4+v5+m, data = df_train,
+                   method = 'lm',
+                   metric = my_metric,
+                   preProcess = c("center", "scale"),
+                   trControl = my_ctrl)
+```
+
+```{r}
+set.seed(2021)
+linearBasisMod3Train <- train(y ~ splines::ns(x1, 5) * (I(x2^2)) * (I(x3^2))+ t + z + w,
+                       data = df_train,
+                   method = 'lm',
+                   metric = my_metric,
+                   preProcess = c("center", "scale"),
+                   trControl = my_ctrl)
+```
+
+
+```{r}
+set.seed(2021)
+linearBasisMod4Train <- train(y ~ splines::ns(x1, 5) * splines::ns(z, 5)+ m,
+                       data = df_train,
+                   method = 'lm',
+                   metric = my_metric,
+                   preProcess = c("center", "scale"),
+                   trControl = my_ctrl)
+```
+
+
+**Regularized regression with Elastic net**
+
+
+```{r}
+#Interact the categorical variable with all pair-wise interactions of the continuous features.
+#The more complex of the 2 models selected from iiA)
+set.seed(2021)
+enet_mod01 <- train(y ~ m:(x5+v1+v2+v3+v4+v5+t+z+w)^2,
+                      data = df_train,
+                      method = 'glmnet',
+                      metric = my_metric,
+                      preProcess = c("center", "scale"),
+                      trControl = my_ctrl)
+
+```
+
+```{r}
+set.seed(2021)
+enet_mod02 <- train(y ~ splines::ns(x1, 5) * (I(x2^2)) * (I(x3^2))+ t + z + w,
+                      data = df_train,
+                      method = 'glmnet',
+                      metric = my_metric,
+                      preProcess = c("center", "scale"),
+                      trControl = my_ctrl)
+```
+
+**Neural Networks**
+
+```{r}
+#once with “base feature” set & once with “expanded feature” set
+#can use AIC and BIC w neural nets
+#want to have more hidden units than inputs, want to add in features to augment the feature space
+set.seed(2021)
+
+
+tune_grid <- expand.grid(size = c(3,6,9,12,15), 
+                          decay = exp(seq(-6,0,length.out=11)))
+
+nnet_base<-  caret::train(y ~ x1+x2+x3+x4+v1+v2+v3+v4+v5+m, 
+                          data = df_train, 
+                          method='nnet',
+                          metric=my_metric,
+                          preProcess=c('center', 'scale'),
+                          trControl=my_ctrl,linout = TRUE,
+                          maxiter = 501,trace = FALSE,
+                          tuneGrid=tune_grid )
+```
+
+
+```{r}
+set.seed(2021)
+nnet_derived <-      train(y ~ x5+w+z+t+v1+v2+v3+v4+v5+m,  data = df_train,
+                           method='nnet',metric=my_metric,
+                           preProcess=c('center', 'scale'),
+                           trControl=my_ctrl,linout = TRUE,maxiter = 501,
+                           trace = FALSE,tuneGrid=tune_grid )
+```
+
+**Random Forest**
+
+```{r}
+#once with “base feature” set & once with “expanded feature” set
+set.seed(2021)
+rf_base <- train(y~x1+x2+x3+x4+v1+v2+v3+v4+v5+m, 
+                      data = df_train,
+                      method = 'rf',
+                      metric = my_metric,
+                      trControl = my_ctrl,
+                      importance = TRUE)
+
+```
+
+
+```{r}
+#once with “base feature” set & once with “expanded feature” set
+set.seed(2021)
+rf_expanded <- train(y ~ x5+w+z+t+v1+v2+v3+v4+v5+m, 
+                      data = df_train,
+                      method = 'rf',
+                      metric = my_metric,
+                      trControl = my_ctrl,
+                      importance = TRUE)
+```
+
+**Gradient Boosted Tree**
+
+```{r}
+#once with “base feature” set & once with “expanded feature” set
+set.seed(2021)
+xgb_base <- train(y~x1+x2+x3+x4+v1+v2+v3+v4+v5+m, 
+                       data = df_train,
+                       method = 'xgbTree',
+                       metric = my_metric,
+                       trControl = my_ctrl)
+```
+
+```{r}
+set.seed(2021)
+xgb_expanded <- train(y ~ x5+w+z+t+v1+v2+v3+v4+v5+m, 
+                       data = df_train,
+                       method = 'xgbTree',
+                       metric = my_metric,
+                       trControl = my_ctrl)
+```
+
+
+#2 methods of our choice that we did not discuss in lecture
+**Support Vector Machines**
+
+```{r}
+set.seed(2021)
+svm_base <- train(y ~ x1+x2+x3+x4+v1+v2+v3+v4+v5+m, 
+                       data = df_train,
+                       method = 'svmLinear',
+                       metric = my_metric,
+                       trControl = my_ctrl)
+```
+
+```{r}
+set.seed(2021)
+svm_extended <- train(y ~ x5+w+z+t+v1+v2+v3+v4+v5+m, 
+                       data = df_train,
+                       method = 'svmLinear',
+                       metric = my_metric,
+                       trControl = my_ctrl)
+```
+
+```{r}
+svm_extended
+svm_base
+```
+
+**Boosted Generalized Linear Model**
+
+```{r}
+set.seed(2021)
+boostedglm_base <-train(y ~ x5+w+z+t+m, 
+                       data = df_train,
+                       method = 'glmboost',
+                       metric = my_metric,
+                       trControl = my_ctrl)
+```
+
+```{r}
+set.seed(2021)
+boostedglm_extended <-  train(y ~ x5+w+z+t+v1+v2+v3+v4+v5+m, 
+                       data = df_train,
+                       method = 'glmboost',
+                       metric = my_metric,
+                       trControl = my_ctrl)
+```
+
+```{r}
+boostedglm_extended
+boostedglm_base
+```
+
+
+**Model selection**
+
+---------------------------------------------------------------
+Let's make predictions on our models so we can pick the best one!
+---------------------------------------------------------------
+
+Linear Model Predictions
+```{r}
+additiveBasePred <- predict(additiveBaseTrain, df_test)
+# get rmse
+additiveBasePredComp <- rmse_vec(df_test$y, additiveBasePred)
+cat("Linear Model Additive Base Feature RMSE: ",additiveBasePredComp)
+```
+```{r}
+additiveDerivedPred <- predict(additiveDerivedTrain, df_test)
+# get rmse
+additiveDerivedPredComp <- rmse_vec(df_test$y, additiveDerivedPred)
+cat("Linear Model Additive Derived Feature RMSE: ",additiveDerivedPredComp)
+```
+```{r}
+linearMod3Pred <- predict(linearBasisMod3Train , df_test)
+# get rmse
+linearMod3PredComp <- rmse_vec(df_test$y, linearMod3Pred)
+cat("Linear Model 3 RMSE: ",linearMod3PredComp)
+```
+```{r}
+linearMod4Pred <- predict(linearBasisMod4Train, df_test)
+#get rmse
+linearMod4PredComp <- rmse_vec(df_test$y, linearMod4Pred)
+cat("Linear Model 4 RMSE: ",linearMod4PredComp)
+```
+Regularized regression with Elastic net:
+```{r}
+eenetPred1 <- predict(enet_mod01, df_test)
+# get rmse
+eenetPred1Comp <- rmse_vec(df_test$y, eenetPred1)
+cat("Enet Mod 1 RMSE: ",eenetPred1Comp)
+```
+```{r}
+eenetPred2 <- predict(enet_mod02, df_test)
+#get rmse
+eenetPred2Comp <- rmse_vec(df_test$y, eenetPred2)
+cat("Enet Mod 2 RMSE: ",eenetPred2Comp)
+```
+Neural Networks:
+```{r}
+nnet_basePred <- predict(nnet_base, df_test)
+# get rmse
+nnet_basePredComp <- rmse_vec(df_test$y, nnet_basePred)
+cat("Nnet Mod 1 RMSE: ",nnet_basePredComp)
+```
+```{r}
+nnet_derivPred <- predict(nnet_derived, df_test)
+# get rmse
+nnet_derivPredComp <- rmse_vec(df_test$y, nnet_derivPred)
+cat("Nnet Mod 2 RMSE: ",nnet_derivPredComp)
+```
+Gradient Boosted Tree:
+```{r}
+xgb_base_Pred <- predict(xgb_base, df_test)
+# get rmse
+xgb_PredComp <- rmse_vec(df_test$y, xgb_base_Pred)
+cat("xgb mod 1 RMSE: ",xgb_PredComp)
+```
+```{r}
+xgb_derived_Pred <- predict(xgb_expanded , df_test)
+# get rmse
+xgb_PredComp <- rmse_vec(df_test$y, xgb_derived_Pred)
+cat("xgb mod 2 RMSE: ",xgb_PredComp)
+```
+Random Forest:
+```{r}
+rf_base_pred <- predict(rf_base , df_test)
+#get rmse
+xgb_PredComp <- rmse_vec(df_test$y, rf_base_pred)
+cat("rf mod 1 RMSE: ",xgb_PredComp)
+```
+
+```{r}
+rf_base_pred <- predict(rf_expanded , df_test)
+# get rmse
+xgb_PredComp <- rmse_vec(df_test$y, rf_base_pred)
+cat("rf mod 2 RMSE: ",xgb_PredComp)
+```
+Support Vector Machines:
+```{r}
+rf_base_pred <- predict(svm_base , df_test)
+# get rmse
+xgb_PredComp <- rmse_vec(df_test$y, rf_base_pred)
+cat("svm mod 1 RMSE: ",xgb_PredComp)
+```
+
+```{r}
+rf_base_pred <- predict(svm_extended , df_test)
+# get rmse
+xgb_PredComp <- rmse_vec(df_test$y, rf_base_pred)
+cat("svm mod 2 RMSE: ",xgb_PredComp)
+```
+
+Boosted Generalized Linear Model:
+```{r}
+boostedglm_base
+boostedglm_extended
+```
+
+
+------------------------------
+**Best Model**
+------------------------------
+The best model is neural network with the base feature set.

@@ -1,0 +1,240 @@
+---
+title: "Classification iiib"
+author: "Anna Heltz"
+date: "2022-12-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE }
+library(tidyverse)
+library(caret)
+```
+
+```{r}
+DF <- readr::read_csv("fall2022_finalproject.csv", col_names = TRUE)
+```
+```{r}
+DF %>% glimpse()
+```
+
+
+-------------------------
+creating the DF in this file
+----------------------------
+
+```{r}
+newDF <- DF %>% 
+  mutate(x5 = 1 - (x1 + x2 + x3 + x4),
+         w = x2 / (x3 + x4),
+         z = (x1 + x2) / (x5 + x4),
+         t = v1 * v2,
+         outcome = ifelse(output < 0.33, 'event', 'non_event'),
+         outcome = factor(outcome, levels = c("event", "non_event")),
+          y = boot::logit(output),
+         y1 = ifelse(outcome=="event",1,0))  
+```
+
+```{r}
+newDF %>% glimpse()
+```
+
+-------------------------------------------------------------------------------------------------------------------------
+*Fitting Bayesian Models*
+I will be fitting the top 2 models from my GLM's. This is because I would like to see how my top 2 models compare.
+-------------------------------------------------------------------------------------------------------------------------
+
+
+```{r}
+linearBasisMod3 <-  glm(y1 ~ splines::ns(x1, 5) * (I(x2^2)) * (I(x3^2))+ t + z + w , data = newDF)
+linearBasisMod3
+```
+```{r}
+linearBasisMod4 <-  glm(y1 ~ splines::ns(x1, 5) * splines::ns(z, 5)+ m , data = newDF)
+linearBasisMod4
+```
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+#design matrices for the top 2 models
+mod_3DM <- model.matrix(y1 ~ splines::ns(x1, 5) * (I(x2^2)) * (I(x3^2))+ t + z + w, data = newDF)
+mod_4DM <- model.matrix(y1 ~ splines::ns(x1, 5) * splines::ns(z, 5)+ m , data = newDF)
+```
+
+
+
+
+```{r}
+info_mod3 <- list(
+  yobs = newDF$y1,### the measurements
+  design_matrix = mod_3DM,
+  mu_beta = 0,
+  tau_beta = 4.5
+)
+
+info_mod4 <- list(
+  yobs = newDF$y1,### the measurements
+  design_matrix = mod_4DM,
+  mu_beta = 0,
+  tau_beta = 4.5
+)
+```
+
+
+```{r}
+logistic_logpost <- function(unknowns, my_info)
+{
+  # extract the design matrix and assign to X
+  X <- my_info$design_matrix
+  
+  # calculate the linear predictor
+  eta <- as.vector( X %*% as.matrix(unknowns))
+  
+  # calculate the event probability
+  mu <- boot::inv.logit(eta)
+  
+  # evaluate the log-likelihood
+  log_lik <- sum(dbinom(x = my_info$yobs,
+                        size = 1, 
+                        prob = mu,
+                        log = TRUE))
+  
+  # evaluate the log-prior
+  log_prior <- sum(dnorm(x = unknowns,
+                         mean = my_info$mu_beta,
+                         sd = my_info$tau_beta,
+                         log = TRUE))
+  
+  # sum together
+  log_lik + log_prior
+}
+```
+
+
+
+```{r}
+my_laplace <- function(start_guess, logpost_func, ...)
+{
+  # code adapted from the `LearnBayes`` function `laplace()`
+  fit <- optim(start_guess,
+               logpost_func,
+               gr = NULL,
+               ...,
+               method = "BFGS",
+               hessian = TRUE,
+               control = list(fnscale = -1, maxit = 1001))
+  
+  mode <- fit$par
+  post_var_matrix <- -solve(fit$hessian)
+  p <- length(mode)
+  int <- p/2 * log(2 * pi) + 0.5 * log(det(post_var_matrix)) + logpost_func(mode, ...)
+  # package all of the results into a list
+  list(mode = mode,
+       var_matrix = post_var_matrix,
+       log_evidence = int,
+       converge = ifelse(fit$convergence == 0,
+                         "YES", 
+                         "NO"),
+       iter_counts = as.numeric(fit$counts[1]))
+}
+```
+
+Bayesian Linear Model for our second best model; Model 3
+```{r}
+laplace_mod3 <- my_laplace(rep(0, ncol(mod_3DM)), logistic_logpost, info_mod3)
+cat("The posterior mode for model 3:\n",laplace_mod3$mode)
+cat("\nThe posterior standard deviation  for model 3:\n",laplace_mod3$var_matrix %>% diag() %>% sqrt())
+```
+
+Bayesian Linear Model for our best model; Model 4
+```{r}
+laplace_mod4 <- my_laplace(rep(0, ncol(mod_4DM)), logistic_logpost, info_mod4)
+cat("The posterior mode for model 4:\n",laplace_mod4$mode)
+cat("\nThe posterior standard deviation  for model 4:\n",laplace_mod4$var_matrix %>% diag() %>% sqrt())
+```
+
+
+------------------------------------------------
+These Bayesian models give us UNCERTAINTY on the residual error.
+------------------------------------------------
+
+
+
+*How will we pick our best model?*
+We cannot compare the models with the same performance metrics as we did with the Non-Bayesian Linear Models. This is because uncertainty on the $\beta$ parameters induce uncertainty on the mean trend, $\mu$. Uncertainty on the mean trend induces uncertainty in the performance metrics! The uncertainty however, when assessed ONLY on the training set will not prevent overfitting! Therefore, instead we will compare models based on their Evidence values with Bayes Factors for Bayesian Models.
+
+```{r}
+cat("Bayes factor to compare our 2 Bayesian MOdels is: ", exp( laplace_mod3$log_evidence - laplace_mod4$log_evidence ))
+```
+As we can see here, since the bayes factor is much less than one, we can tell that model 4 is considered to be better than model 3.
+
+*Now that we have our best model, which is model 4, lets visualize the regression coefficient posterior summary statistics *
+
+```{r}
+viz_post_coefs <- function(post_means, post_sds, xnames)
+{
+  tibble::tibble(
+    mu = post_means,
+    sd = post_sds,
+    x = xnames
+  ) %>% 
+    mutate(x = factor(x, levels = xnames)) %>% 
+    ggplot(mapping = aes(x = x)) +
+    geom_hline(yintercept = 0, color = 'grey', linetype = 'dashed') +
+    geom_point(mapping = aes(y = mu)) +
+    geom_linerange(mapping = aes(ymin = mu - 2 * sd,
+                                 ymax = mu + 2 * sd,
+                                 group = x)) +
+    labs(x = 'feature', y = 'coefficient value') +
+    coord_flip() +
+    theme_bw()
+}
+```
+
+```{r}
+viz_post_coefs(laplace_mod4$mode[1:ncol(mod_4DM)],
+               sqrt(diag(laplace_mod4$var_matrix)[1:ncol(mod_4DM)]),
+               colnames(mod_4DM))
+```
+
+As you can see in the coefficient posterior summary statistics for our best model, model 4, we can see that most of the coefficients are very uncertain.$\sigma$ acts as a scaling term on the posterior uncertainty. To calculate the covariance matrix for the regression coefficients, we will assume that $\sigma$=1 so we can examine the scaled uncertainty.
+
+```{r}
+covmat_quad_mod4 <- 1^2 * solve( t(mod_4DM) %*% mod_4DM )
+covmat_quad_mod4 %>% diag() %>% sqrt()
+```
+These are the posterior standard deviation for each feature in our model.
+
+```{r}
+y_col <- newDF %>% pull(y1) %>% as.matrix()
+head(y_col)
+```
+
+```{r}
+postmeans_quad_mod4 <- solve( t(mod_4DM) %*% mod_4DM , 
+                                       t(mod_4DM) %*% y_col)
+postmeans_quad_mod4
+```
+ Thus, the posterior means would not change because $\sigma$ is not in the formula! I believe we are still quite uncertain about $\sigma$. Since we are uncertain about $\sigma$, I believe the MLE on $\sigma$ is uncertain, since $\sigma$ acts as a scaling term on the posterior uncertainty.
+
+
+
+
+
+
+
+
+
+

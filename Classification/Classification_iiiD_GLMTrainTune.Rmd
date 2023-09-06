@@ -1,0 +1,362 @@
+---
+title: "Classification iiiD"
+author: "Anna Heltz"
+date: "2022-12-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE }
+library(tidyverse)
+library(caret)
+library(carat)
+library(glmnet)
+library(e1071) 
+library(caTools) 
+library(dplyr)
+library(ggplot2)
+library(yardstick)
+library(randomForest)
+library(xgboost)
+```
+
+```{r}
+DF <- readr::read_csv("fall2022_finalproject.csv", col_names = TRUE)
+```
+
+
+----------------------------
+Creating the DF in this file
+----------------------------
+
+```{r}
+newDF <- DF %>% 
+  mutate(x5 = 1 - (x1 + x2 + x3 + x4),
+         w = x2 / (x3 + x4),
+         z = (x1 + x2) / (x5 + x4),
+         t = v1 * v2,
+         outcome = ifelse(output < 0.33, 'event', 'non_event'),
+         outcome = factor(outcome, levels = c("event", "non_event")),
+          y = boot::logit(output),
+         y1 = ifelse(outcome=="event",1,0))  
+```
+
+
+---------------------------------------------
+Lets train the models now, we will specify the performance metric to be ROC because these are classification models!
+---------------------------------------------
+
+## We will make the my_ctrl and the my_metric the same for all of the models.
+```{r}
+my_ctrl <- trainControl(method = 'cv', number = 5,
+                             summaryFunction = twoClassSummary,
+                             classProbs = TRUE,
+                             savePredictions = TRUE)
+my_metric <- "ROC"
+```
+
+# Linear Models!
+### Additive Linear Model with the derived features
+```{r}
+set.seed(2021)
+additiveDerivedTrain <- train(outcome~x5+w+z+t+v1+v2+v3+v4+v5+m, 
+                                  data = newDF,
+                   method = 'glm',
+                   metric = my_metric,
+                   preProcess = c("center", "scale"),
+                   trControl = my_ctrl)
+```
+
+### Additive Linear Model with the base features
+```{r}
+set.seed(2021)
+additiveBaseTrain <- train(outcome~x1+x2+x3+x4+v1+v2+v3+v4+v5+m, data = newDF,
+                   method = 'glm',
+                   metric = my_metric,
+                   preProcess = c("center", "scale"),
+                   trControl = my_ctrl)
+```
+
+### Our Best Model from Classification part a
+```{r}
+set.seed(2021)
+linearBasisMod3Train <- train(outcome ~ splines::ns(x1, 5) * (I(x2^2)) * (I(x3^2))+ t + z + w,
+                       data = newDF,
+                   method = 'glm',
+                   metric = my_metric,
+                   preProcess = c("center", "scale"),
+                   trControl = my_ctrl)
+```
+
+### Our Second Best Model from Classification part a
+```{r}
+set.seed(2021)
+linearBasisMod4Train <- train(outcome ~ splines::ns(x1, 5) * (I(x2^2)) * (I(x3^2))+ t + m,
+                       data = newDF,
+                   method = 'glm',
+                   metric = my_metric,
+                   preProcess = c("center", "scale"),
+                   trControl = my_ctrl)
+```
+
+## Regularized regression with Elastic net
+### Interact the categorical variable with all pair-wise interactions of the continuous features.
+```{r}
+set.seed(2021)
+enet_mod01 <- train(outcome~m:(t+z+w+x5+v1 + v2 + v3 + v4 + v5)^2,
+                   method = 'glmnet',
+                   metric = my_metric,
+                   trControl = my_ctrl,
+                    preProcess = c("center", "scale"),
+                   data = newDF)
+```
+### The more complex of the 2 models selected from iiA)
+```{r}
+set.seed(2021)
+enet_mod02 <- train(outcome ~ splines::ns(x1, 5) * (I(x2^2)) * (I(x3^2))+ t + z + w + m,
+                      data = newDF,
+                      method = 'glmnet',
+                      metric = my_metric,
+                      preProcess = c("center", "scale"),
+                      trControl = my_ctrl)
+```
+
+## Neural Networks
+### Base Feature Set
+```{r}
+set.seed(2021)
+nnet_base <- train(outcome ~ x1 + x2 + x3 + x4 + v1 + v2 + v3 + v4 +v5 + m, 
+                        method = 'nnet',
+                        metric = my_metric,
+                        preProcess = c("center", "scale"),
+                        trControl = my_ctrl,
+                        data = newDF,
+                        trace = FALSE)
+```
+
+### Expanded Feature Set
+```{r}
+set.seed(2021)
+nnet_derived <-      train(outcome ~ x5+w+z+t+v1+v2+v3+v4+v5+m, 
+                           data = newDF,
+                           method = 'nnet',
+                           metric = my_metric,
+                           preProcess = c("center", "scale"),
+                           trControl = my_ctrl,
+                           trace = FALSE)
+```
+
+## Random Forest
+### Base Features
+```{r}
+set.seed(2021)
+rf_base <- train(outcome~x1+x2+x3+x4+v1+v2+v3+v4+v5+m, 
+                        method = 'rf',
+                        metric = my_metric,
+                        trControl = my_ctrl,
+                        data = newDF,
+                        importance = TRUE)
+```
+
+### Expanded Feature Set
+```{r}
+set.seed(2021)
+rf_expanded <- train(outcome ~ x5+w+z+t+v1+v2+v3+v4+v5+m, 
+                        method = 'rf',
+                        metric = my_metric,
+                        trControl = my_ctrl,
+                        data = newDF,
+                        importance = TRUE)
+```
+
+
+## Gradient Boosted Tree
+### Base Features
+```{r, warning=FALSE}
+#once with “base feature” set & once with “expanded feature” set
+set.seed(2021)
+xgb_base <- train(outcome~x1+x2+x3+x4+v1+v2+v3+v4+v5+m, 
+                       method = 'xgbTree',
+                        metric = my_metric,
+                        trControl = my_ctrl,
+                        data = newDF)
+```
+
+### Expanded Feature Set
+```{r}
+set.seed(2021)
+xgb_expanded <- train(outcome ~ x5+w+z+t+v1+v2+v3+v4+v5+m, 
+                       method = 'xgbTree',
+                        metric = my_metric,
+                        trControl = my_ctrl,
+                        data = newDF)
+```
+
+# 2 methods of our choice that we did not discuss in lecture
+## Support Vector Machines
+```{r}
+set.seed(2021)
+svm_base <- train(outcome ~ x1+x2+x3+x4+v1+v2+v3+v4+v5+m, 
+                        method = 'svmLinear',
+                        metric = my_metric,
+                        trControl = my_ctrl,
+                        preProcess=c('center', 'scale'),
+                        data = newDF)
+```
+
+```{r}
+set.seed(2021)
+svm_extended <- train(outcome ~ x5+w+z+t+v1+v2+v3+v4+v5+m, 
+                        method = 'svmLinear',
+                        metric = my_metric,
+                        trControl = my_ctrl,
+                        preProcess=c('center', 'scale'),
+                        data = newDF)
+```
+
+## Boosted Generalized Linear Model
+### Base Features
+```{r}
+set.seed(2021)
+boostedglm_base <-train(outcome ~ x5+w+z+t, 
+                       data = newDF,
+                       method = 'glmboost',
+                       preProcess=c('center', 'scale'),
+                       metric = my_metric,
+                       trControl = my_ctrl)
+```
+
+### Expanded Features
+```{r}
+set.seed(2021)
+boostedglm_extended <-  train(outcome ~ x5+w+z+t+v1+v2+v3+v4+v5+m, 
+                       data = newDF,
+                       method = 'glmboost',
+                       preProcess=c('center', 'scale'),
+                       metric = my_metric,
+                       trControl = my_ctrl)
+```
+
+**Model selection**
+
+```{r}
+compare_models <- resamples(list(     baseAddiditive = additiveBaseTrain,
+                                      derivedAdditive = additiveDerivedTrain,
+                                      linearBasisModel3 = linearBasisMod3Train,
+                                      linearBasisModel4 = linearBasisMod4Train,
+                                      enet_1 = enet_mod01,
+                                      enet_2 = enet_mod02,
+                                      nnetBase = nnet_base,
+                                      nnetDerived = nnet_derived,
+                                      rfBase = rf_base,
+                                      rfDerived = rf_expanded,
+                                      xgbBase = xgb_base,
+                                      xgbDerived = xgb_expanded, 
+                                      svmBase = svm_base,
+                                      svmDerived = svm_extended,
+                                      boostedglmBase = boostedglm_base,
+                                      boostedglmExtended = boostedglm_extended))
+```
+
+```{r}
+dotplot(compare_models)
+```
+
+---------------------------------------------------
+**Best Model with the ROC Metric**
+---------------------------------------------------
+
+After viewing the dot plot summary comparing all of our models, I would state that the the Random Forest model with the base features and my best linear basis model seem to be the best models. This is due to the fact that it is at the top of the dot plot, with the highest ROC value, and one of the better values for Sensitivity and Specificity.
+
+---------------------------------------------------
+**Confusion Matrices for Each model**
+---------------------------------------------------
+
+                                      
+**Confusion Matrix for Gradient Boosted Tree with Derived Features**
+```{r}
+confusionMatrix.train(xgb_expanded) 
+```
+
+**Confusion Matrix for RF with Derived Features**
+```{r}
+confusionMatrix.train(rf_expanded) 
+```
+
+**Confusion Matrix for RF with Base Features**
+```{r}
+confusionMatrix.train(rf_base) 
+```
+
+**Confusion Matrix for Gradient Boosted Tree with Base Features**
+```{r}
+confusionMatrix.train(xgb_base) 
+```
+
+**Confusion Matrix for Elastic Net with our more complex linear model from part iiiA**
+```{r}
+confusionMatrix.train(enet_mod02) 
+```
+
+**Confusion Matrix for second best Model from Classification part a**
+```{r}
+confusionMatrix.train(linearBasisMod4Train) 
+```
+
+**Confusion Matrix for Neural Network with Base Features**
+```{r}
+confusionMatrix.train(nnet_base) 
+```
+
+**Confusion Matrix for Neural Network with Derived Features**
+```{r}
+confusionMatrix.train(nnet_derived) 
+```
+
+
+
+**Confusion Matrix for Linear Model with Additive Derived Features**
+```{r}
+confusionMatrix.train(additiveDerivedTrain) 
+```
+
+**Confusion Matrix for Boosted GLM with Derived Features**
+```{r}
+confusionMatrix.train(boostedglm_extended) 
+```
+
+**Confusion Matrix for Boosted GLM with Base Features**
+```{r}
+confusionMatrix.train(boostedglm_base) 
+```
+
+**Confusion Matrix for SVM with Derived Features**
+```{r}
+confusionMatrix.train(svm_extended) 
+```
+
+**Confusion Matrix for Elastic Net the categorical variable interacted with all pair-wise interactions of the continuous features**
+```{r}
+confusionMatrix.train(enet_mod01) 
+```
+
+**Confusion Matrix for SVM with Base Features**
+```{r}
+confusionMatrix.train(svm_base) 
+```
+
+-----------------------------------------------
+**Which model is the best if you are interested in maximizing Accuracy compared to maximizing the Area Under the ROC Curve (ROC AUC)?**
+-----------------------------------------------
+
+**Confusion Matrix for RF with Base Features**
+```{r}
+confusionMatrix.train(rf_base) 
+```
+As you can see in the confusion matrices above, the random forest with base features is the best model if you are interested in maximizing Accuracy.
+
+
+

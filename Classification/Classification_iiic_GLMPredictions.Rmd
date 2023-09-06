@@ -1,0 +1,310 @@
+---
+title: "Classification iiic"
+author: "Anna Heltz"
+date: "2022-12-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE }
+library(tidyverse)
+library(caret)
+```
+
+```{r}
+DF <- readr::read_csv("fall2022_finalproject.csv", col_names = TRUE)
+```
+
+
+```{r}
+DF %>% glimpse()
+```
+
+
+----------------------------
+creating the DF in this file
+----------------------------
+
+```{r}
+newDF <- DF %>% 
+  mutate(x5 = 1 - (x1 + x2 + x3 + x4),
+         w = x2 / (x3 + x4),
+         z = (x1 + x2) / (x5 + x4),
+         t = v1 * v2,
+         outcome = ifelse(output < 0.33, 'event', 'non_event'),
+         outcome = factor(outcome, levels = c("event", "non_event")),
+          y = boot::logit(output),
+         y1 = ifelse(outcome=="event",1,0))  
+```
+
+```{r}
+newDF %>% glimpse()
+```
+
+
+```{r}
+linearBasisMod3 <-  glm(y1 ~ splines::ns(x1, 5) * (I(x2^2)) * (I(x3^2))+ t + z + w , data = newDF)
+linearBasisMod3
+```
+
+```{r}
+linearBasisMod4 <-  glm(y1 ~ splines::ns(x1, 5) * splines::ns(z, 5)+ m , data = newDF)
+linearBasisMod4
+```
+
+-----------------------------------------
+**Lets make some predictions!**
+-----------------------------------------
+
+Lets see the the ranges of x1 and z together
+
+```{r}
+newDF %>% ggplot(mapping = aes(x=x1,y=z)) +
+  geom_point()
+```
+So we can see, that we should focus on values of z that are greater than 1.5 because we do not see any values for z that are less than 1 when x1 is between .4 and .6.
+Also, based on our EDA, we would like to focus on values for x1 that are between 0-0.05 and 0.3-0.6, and values for z that are between 0-1 and 3.5 to 5.
+
+
+
+**We will use the Bayesian Models to make the predictions**
+
+x1,x2,x3,t,z,w
+```{r}
+viz_grid_mod3<- expand.grid(x1 = seq(.3,.6, length.out = 6),
+                            z = seq(3.5,5, length.out = 6),
+                        x2 = seq(0,.3, length.out = 6),
+                         x3 = seq(.1,.5, length.out = 6),
+                         t = seq(0,10, length.out = 7),
+                         w = seq(0,1, length.out = 6),
+                        KEEP.OUT.ATTRS = FALSE,
+                        stringsAsFactors = FALSE) %>% 
+  as.data.frame() %>% tibble::as_tibble()
+```
+
+
+x1,z,m
+```{r}
+viz_grid_mod4<- expand.grid(x1 = seq(.3,.6, length.out = 6),
+                        z = seq(3.5,5, length.out = 20),
+                        m = c("A","B","C","D","E"),
+                        KEEP.OUT.ATTRS = FALSE,
+                        stringsAsFactors = FALSE) %>% 
+  as.data.frame() %>% tibble::as_tibble()
+```
+
+```{r}
+#design matrices for the top 2 models
+mod_3DM <- model.matrix(y1 ~ splines::ns(x1, 5) * (I(x2^2)) * (I(x3^2))+ t + z + w, data = newDF)
+mod_4DM <- model.matrix(y1 ~ splines::ns(x1, 5) * splines::ns(z, 5)+ m , data = newDF)
+```
+
+
+
+
+```{r}
+info_mod3 <- list(
+  yobs = newDF$y1,### the measurements
+  design_matrix = mod_3DM,
+  mu_beta = 0,
+  tau_beta = 4.5
+)
+
+info_mod4 <- list(
+  yobs = newDF$y1,### the measurements
+  design_matrix = mod_4DM,
+  mu_beta = 0,
+  tau_beta = 4.5
+)
+```
+
+
+```{r}
+logistic_logpost <- function(unknowns, my_info)
+{
+  # extract the design matrix and assign to X
+  X <- my_info$design_matrix
+  
+  # calculate the linear predictor
+  eta <- as.vector( X %*% as.matrix(unknowns))
+  
+  # calculate the event probability
+  mu <- boot::inv.logit(eta)
+  
+  # evaluate the log-likelihood
+  log_lik <- sum(dbinom(x = my_info$yobs,
+                        size = 1, 
+                        prob = mu,
+                        log = TRUE))
+  
+  # evaluate the log-prior
+  log_prior <- sum(dnorm(x = unknowns,
+                         mean = my_info$mu_beta,
+                         sd = my_info$tau_beta,
+                         log = TRUE))
+  
+  # sum together
+  log_lik + log_prior
+}
+```
+
+
+
+```{r}
+my_laplace <- function(start_guess, logpost_func, ...)
+{
+  # code adapted from the `LearnBayes`` function `laplace()`
+  fit <- optim(start_guess,
+               logpost_func,
+               gr = NULL,
+               ...,
+               method = "BFGS",
+               hessian = TRUE,
+               control = list(fnscale = -1, maxit = 1001))
+  
+  mode <- fit$par
+  post_var_matrix <- -solve(fit$hessian)
+  p <- length(mode)
+  int <- p/2 * log(2 * pi) + 0.5 * log(det(post_var_matrix)) + logpost_func(mode, ...)
+  # package all of the results into a list
+  list(mode = mode,
+       var_matrix = post_var_matrix,
+       log_evidence = int,
+       converge = ifelse(fit$convergence == 0,
+                         "YES", 
+                         "NO"),
+       iter_counts = as.numeric(fit$counts[1]))
+}
+```
+
+Bayesian Linear Model for our second best model; Model 3
+```{r}
+laplace_mod3 <- my_laplace(rep(0, ncol(mod_3DM)), logistic_logpost, info_mod3)
+laplace_mod4 <- my_laplace(rep(0, ncol(mod_4DM)), logistic_logpost, info_mod4)
+```
+
+```{r}
+generate_glm_post_samples <- function(mvn_result, num_samples)
+{
+  # specify the number of unknown beta parameters
+  length_beta <- length(mvn_result$mode)
+  
+  # generate the random samples
+  beta_samples <- MASS::mvrnorm(n = num_samples,
+                                mu = mvn_result$mode,
+                                Sigma = mvn_result$var_matrix)
+  
+  # change the data type and name
+  beta_samples %>% 
+    as.data.frame() %>% tibble::as_tibble() %>% 
+    purrr::set_names(sprintf("beta_%02d", (1:length_beta) - 1))
+}
+
+post_logistic_pred_samples <- function(Xnew, Bmat)
+{
+  # calculate the linear predictor at all prediction points and posterior samples
+  eta_mat <- Xnew %*% t(Bmat)
+  
+  # calculate the event probability
+  mu_mat <- boot::inv.logit(eta_mat)
+  
+  # book keeping
+  list(eta_mat = eta_mat, mu_mat = mu_mat)
+}
+
+summarize_logistic_pred_from_laplace <- function(mvn_result, Xtest, num_samples)
+{
+  # generate posterior samples of the beta parameters
+  betas <- generate_glm_post_samples(mvn_result, num_samples)
+  
+  # data type conversion
+  betas <- as.matrix(betas)
+  
+  # make posterior predictions on the test set
+  pred_test <- post_logistic_pred_samples(Xtest, betas)
+  
+  # calculate summary statistics on the posterior predicted probability
+  # summarize over the posterior samples
+  
+  # posterior mean, should you summarize along rows (rowMeans) or 
+  # summarize down columns (colMeans) ???
+  mu_avg <- rowMeans(pred_test$mu_mat)
+  
+  # posterior quantiles
+  mu_q05 <- apply(pred_test$mu_mat, 1, stats::quantile, probs = 0.05)
+  mu_q95 <- apply(pred_test$mu_mat, 1, stats::quantile, probs = 0.95)
+  
+  # book keeping
+  tibble::tibble(
+    mu_avg = mu_avg,
+    mu_q05 = mu_q05,
+    mu_q95 = mu_q95
+  ) %>% 
+    tibble::rowid_to_column("pred_id")
+}
+```
+
+```{r}
+viz_mod3 <- model.matrix(~ splines::ns(x1, 5) * (I(x2^2)) * (I(x3^2))+ t + z + w, data = viz_grid_mod3 )
+viz_mod4 <- model.matrix(~ splines::ns(x1, 5) * splines::ns(z, 5)+ m , data = viz_grid_mod4 )
+```
+
+
+```{r}
+set.seed(8123) 
+
+post_pred_summary_mod3 <- summarize_logistic_pred_from_laplace(laplace_mod3, mod_3DM, 2500)
+post_pred_summary_mod4 <- summarize_logistic_pred_from_laplace(laplace_mod4, mod_4DM, 2500)
+```
+
+```{r}
+viz_bayes_logpost_preds3 <- function(post_pred_summary, input_df)
+{
+  post_pred_summary %>% 
+    left_join(input_df %>% tibble::rowid_to_column('pred_id'),
+              by = 'pred_id') %>% 
+    ggplot(mapping = aes(x = z)) +
+    geom_ribbon(mapping = aes(ymin = mu_q05, y = mu_avg,ymax = mu_q95), alpha = .25, color = "orange") +
+    facet_wrap( ~ x1, labeller = 'label_both') +
+    labs(y = "event probability") +
+    theme_bw()
+}
+```
+
+```{r}
+viz_bayes_logpost_preds3(post_pred_summary_mod3, viz_grid_mod3)
+```
+
+```{r}
+viz_bayes_logpost_preds4 <- function(post_pred_summary, input_df)
+{
+  post_pred_summary %>% 
+    left_join(input_df %>% tibble::rowid_to_column('pred_id'),
+              by = 'pred_id') %>% 
+    ggplot(mapping = aes(x = z)) +
+    geom_ribbon(mapping = aes(ymin = mu_q05, y = mu_avg,ymax = mu_q95), alpha = .25, color = "orange") +
+    facet_wrap( ~ x1, labeller = 'label_both') +
+    labs(y = "event probability") +
+    theme_bw()
+}
+```
+
+
+
+```{r}
+viz_bayes_logpost_preds4(post_pred_summary_mod4, viz_grid_mod4)
+```
+
+**Are the predictive trends consistent between the 2 selected linear models?**
+As you can see from the visual, the predictive trends are consistent between the models. Both visuals are very uncertain. The gray ribbon is the uncertainty while the orange is error. As you can see, we are pretty uncertain in both models, and the error ribbon is not that big. But to conclude, the predictive trends are consistent between the two models.
+
+
+
+
+
+
+
+

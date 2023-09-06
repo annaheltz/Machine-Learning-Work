@@ -1,0 +1,202 @@
+---
+title: "Regression ia"
+author: "Anna Heltz"
+date: "2022-11-10"
+output: html_document
+---
+
+```{r, include = FALSE }
+library(tidyverse)
+library(caret)
+```
+
+```{r}
+DF <- readr::read_csv("fall2022_finalproject.csv", col_names = TRUE)
+```
+```{r}
+DF %>% glimpse()
+```
+
+
+-------------------------
+creating the DF in this file
+----------------------------
+
+```{r}
+newDF <- DF %>% 
+  mutate(x5 = 1 - (x1 + x2 + x3 + x4),
+         w = x2 / (x3 + x4),
+         z = (x1 + x2) / (x5 + x4),
+         t = v1 * v2,
+         outcome = ifelse(output < 0.33, 'event', 'non_event'),
+         outcome = factor(outcome, levels = c("event", "non_event")),
+         y = boot::logit(output))  
+```
+
+```{r}
+newDF %>% glimpse()
+```
+
+
+
+
+--------------------------------------
+Let's fit 3 models with the base features
+---------------------------------------
+x5 is not a base feature
+
+All linear additive features:
+```{r}
+additiveBaseModel <- lm(y~x1+x2+x3+x4+v1+v2+v3+v4+v5, data = newDF)
+additiveBaseModel
+```
+
+Interaction of the categorical input with all continuous inputs:
+```{r}
+categoricalContinuousBaseModel <- lm(y~x1:m+x2:m+x3:m+x4:m+v1:m+v2:m+v3:m+v4:m+v5:m, data = newDF)
+categoricalContinuousBaseModel
+```
+
+All pair-wise interactions of the continuous inputs:
+```{r}
+pairwiseContinuousBase <- lm(y ~ (x1+x2+x3+x4+v1+v2+v3+v4+v5)^2, data=newDF)
+pairwiseContinuousBase
+```
+
+--------------------------------------------------------------
+3 Models using the “expanded feature” set
+--------------------------------------------------------------
+All linear additive features:
+```{r}
+additiveBaseDerived <- lm(y~x5+w+z+t+v1+v2+v3+v4+v5, data = newDF)
+additiveBaseDerived
+```
+
+Interaction of the categorical input with all continuous inputs:
+```{r}
+categoricalContinuousDerived <- lm(y~x5:m+w:m+z:m+t:m+v1:m+v2:m+v3:m+v4:m+v5:m, data = newDF)
+categoricalContinuousDerived
+```
+All pair-wise interactions of the continuous inputs:
+```{r}
+pairwiseContinuousDerived <- lm(y ~ (x5+w+z+t+m+v1+v2+v3+v4+v5)^2, data=newDF)
+pairwiseContinuousDerived
+```
+
+-------------------------------------------------------------
+3 Models linear basis function models:
+-------------------------------------------------------------
+
+```{r}
+linearBasisMod1 <- lm(y ~ splines::ns(x1, 5) * splines::ns(x2, 5), data = newDF)
+linearBasisMod1
+```
+```{r}
+linearBasisMod2 <- lm(y ~ splines::ns(x1, 5) * (I(x2) + I(x2^2)) + t + m, data = newDF)
+linearBasisMod2
+```
+```{r}
+linearBasisMod3 <-  lm(y ~ splines::ns(x1, 5) * (I(x2^2)) * (I(x3^2))+ t + z + w , data = newDF)
+linearBasisMod3
+```
+```{r}
+linearBasisMod4 <-  lm(y ~ splines::ns(x1, 5) * splines::ns(z, 5)+ m , data = newDF)
+linearBasisMod4
+```
+
+
+
+--------------------------------------------------------------------------------------
+*Lets find out which model is the best based on AIC, BIC and R-Squared!!*
+--------------------------------------------------------------------------------------
+
+```{r}
+extract_metrics <- function(mod, mod_name)
+{
+  broom::glance(mod) %>% mutate(mod_name = mod_name)
+}
+
+all_metrics <- purrr::map2_dfr(list(additiveBaseModel,additiveBaseDerived, categoricalContinuousBaseModel, categoricalContinuousDerived, pairwiseContinuousBase, pairwiseContinuousDerived, linearBasisMod1,linearBasisMod2,linearBasisMod3,linearBasisMod4),
+                               as.numeric(1:10),
+                               extract_metrics)
+
+all_metrics %>% 
+  select(mod_name, df, r.squared, AIC, BIC) %>% 
+  pivot_longer(!c("mod_name", "df")) %>% 
+  ggplot(mapping = aes(x = mod_name, y = value)) +
+  geom_point(size = 5) +
+  facet_wrap(~name, scales = "free_y") +
+  scale_x_continuous( breaks = c(1:10)) +
+  theme_bw()
+```
+
+
+
+```{r}
+
+rSq <- c(broom::glance(additiveBaseModel)[[1]], broom::glance(additiveBaseDerived)[[1]],broom::glance(categoricalContinuousBaseModel)[[1]],broom::glance(categoricalContinuousDerived)[[1]],broom::glance(pairwiseContinuousBase)[[1]],broom::glance(pairwiseContinuousDerived)[[1]],broom::glance(linearBasisMod1)[[1]],broom::glance(linearBasisMod2)[[1]],broom::glance(linearBasisMod3)[[1]],broom::glance(linearBasisMod4)[[1]])
+rSq
+AIC <- c(broom::glance(additiveBaseModel)[[8]],broom::glance(additiveBaseDerived)[[8]],broom::glance(categoricalContinuousBaseModel)[[8]],broom::glance(categoricalContinuousDerived)[[8]],broom::glance(pairwiseContinuousBase)[[8]],broom::glance(pairwiseContinuousDerived)[[8]],broom::glance(linearBasisMod1)[[8]],broom::glance(linearBasisMod2)[[8]],broom::glance(linearBasisMod3)[[8]],broom::glance(linearBasisMod4)[[8]])
+AIC
+BIC <- c(broom::glance(additiveBaseModel)[[9]],broom::glance(additiveBaseDerived)[[9]],broom::glance(categoricalContinuousBaseModel)[[9]],broom::glance(categoricalContinuousDerived)[[9]],broom::glance(pairwiseContinuousBase)[[9]],broom::glance(pairwiseContinuousDerived)[[9]],broom::glance(linearBasisMod1)[[9]],broom::glance(linearBasisMod2)[[9]],broom::glance(linearBasisMod3)[[9]],broom::glance(linearBasisMod4)[[9]])
+BIC
+cat("The best model according to R-squared is:", max(rSq))
+cat(" which is model", which.max(rSq))
+cat("\nThe best model according to AIC is:", min(AIC))
+cat(" which is model", which.min(AIC))
+cat("\nThe best model according to BIC is:", min(BIC))
+cat(" which is model", which.min(BIC))
+```
+As you can see model 10, or my linearBasisMod4, model is the best model.
+```{r}
+rSq <- rSq[-10]
+AIC <- AIC[-10]
+BIC <- BIC[-10]
+rSq
+cat("The second best model according to R-squared is:", max(rSq))
+cat(" which is model", which.max(rSq))
+cat("\nThe second best model according to AIC is:", min(AIC))
+cat(" which is model", which.min(AIC))
+cat("\nThe second best model according to BIC is:", min(BIC))
+cat(" which is model", which.min(BIC))
+```
+
+As you can see model 9, or my linearBasisMod3, model is the second best model.
+```{r}
+rSq <- rSq[-9]
+AIC <- AIC[-9]
+BIC <- BIC[-9]
+rSq
+cat("The third best model according to R-squared is:", max(rSq))
+cat(" which is model", which.max(rSq))
+cat("\nThe third best model according to AIC is:", min(AIC))
+cat(" which is model", which.min(AIC))
+cat("\nThe third best model according to BIC is:", min(BIC))
+cat(" which is model", which.min(BIC))
+```
+
+As you can see model 7, or my linearBasisMod1, model is the third best model.
+
+
+
+
+-------------------------------------------------------------------
+Coefficient Summaries for the top three models:
+-----------------------------------------------------------------
+
+
+
+```{r}
+coefplot::coefplot(linearBasisMod1)
+```
+```{r}
+coefplot::coefplot(linearBasisMod3)
+```
+```{r}
+coefplot::coefplot(linearBasisMod4)
+```
+*How do the coefficient plots compare to the top three models:*
+The coefficient plots are very similar between the top three models. The majority of coefficient values seem fairly insignificant for all 3 models, a sign that they may too be complex or possibly over fitting the data set. However, in both linear basis models 3 and 4 it seems like the coefficients for x1 splines interacting with the x2 quadratic term are very positively significant. In all 3 models, w, z, and t seem to be of little importance. Also the I(X2^2) seems to be important as well.
+
+
+

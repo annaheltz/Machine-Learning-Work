@@ -1,0 +1,210 @@
+---
+title: "Basic Exploration"
+author: "Anna Heltz"
+date: "2022-11-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+----------------------------------------------------------------------------------------------------------
+**Loading and Modifying Data**
+-----------------------------------------------------------------------------------------------------------------------------
+
+```{r, include = FALSE }
+library(tidyverse)
+library(reshape2)
+```
+
+
+```{r}
+DF <- readr::read_csv("fall2022_finalproject.csv", col_names = TRUE)
+```
+
+*Now let's take a peek at the data to begin to look at how it is formatted. *
+
+```{r}
+DF %>% glimpse()
+```
+
+
+```{r}
+newDF <- DF %>% 
+  mutate(x5 = 1 - (x1 + x2 + x3 + x4),
+         w = x2 / (x3 + x4),
+         z = (x1 + x2) / (x5 + x4),
+         t = v1 * v2,
+         outcome = ifelse(output < 0.33, 'event', 'non_event'),
+         outcome = factor(outcome, levels = c("event", "non_event")),
+          y = boot::logit(output))
+
+glimpse(newDF)   
+```
+
+----------------------------------------------------------------------
+*Showing the distributions of the inputs *
+----------------------------------------------------------------------
+**I am going to show the ranges of x1-x5 and v1-v5**
+----------------------------------------------------------------------
+
+```{r}
+dfX <- newDF %>% select(x1,x2,x3,x4,x5,m)
+
+dfX <- melt(dfX, id = c("m"))
+
+ggplot(dfX, aes(x = variable, y = value)) +            
+  geom_boxplot(mapping = aes(color=variable)) + 
+  facet_grid(~m)
+```
+```{r}
+dfV <- newDF %>% select(v1,v2,v3,v4,v5,m)
+
+dfV <- melt(dfV, id = c("m"))
+
+ggplot(dfV, aes(x = variable, y = value)) +            
+  geom_boxplot(mapping = aes(color=variable)) + 
+  facet_grid(~m)
+```
+
+- As you can see, the ranges of x1-x5 are not consistent with each other. x4 is obviously the smallest component in all of the samples across all of the machines. X1 and x3 are similar to each other. x5 is cleared a little skewed right, and has outliers.
+**NOTE**: this is important to notice that since x4 is noticeably less than all of the other inputs, and w = x2 / (x3 + x4) and z = (x1 + x2) / (x4 + x5). This means that w is mostly the ratio between x2 and x3, because x4 will not have that big of an effect because it is a much smaller percent of the total sample compared to x3. This also means that z is most the ratio between x1 and x2 compared to x5, due to the same reason.
+
+- As you can see with the ranges of v1-v5, they are not consistent with each other either. v2 and v4 are the smallest and are similar to eachother. Whereas v1,v3,v5 are similar to eachother.
+
+
+Are there differences in input values based on the discrete groups?
+As you can see, each machine has similar ranges for the values of v1-v5. So there are not really different input values based on the discrete groups.
+---------------------------------------------------------------------------------
+Hopefully this is a better visual of the ranges of the inputs
+---------------------------------------------------------------------------------
+
+```{r}
+newDF %>% 
+  select(-m,-outcome,-output,-t,-z,-w,-v1,-v2,-v3,-v4,-v5)%>%
+  tibble::rowid_to_column("obs_id") %>% 
+  pivot_longer(!c("obs_id", "y")) %>% 
+  ggplot(mapping = aes(x = value, y = y)) +
+  geom_point(alpha = 0.5, mapping = aes(color=name)) +
+  facet_wrap(~name, scales = "free_x") +
+  theme_bw()
+```
+```{r}
+newDF %>% 
+  select(-m,-outcome,-output,-t,-z,-w,-x1,-x2,-x3,-x4,-x5)%>%
+  tibble::rowid_to_column("obs_id") %>% 
+  pivot_longer(!c("obs_id", "y")) %>% 
+  ggplot(mapping = aes(x = value, y = y)) +
+  geom_point(alpha = 0.5, mapping = aes(color=name)) +
+  facet_wrap(~name, scales = "free_x") +
+  theme_bw()
+```
+```{r}
+newDF %>% 
+  select(t,z,w,y)%>%
+  tibble::rowid_to_column("obs_id") %>% 
+  pivot_longer(!c("obs_id", "y")) %>% 
+  ggplot(mapping = aes(x = value, y = y)) +
+  geom_point(alpha = 0.5, mapping = aes(color=name)) +
+  facet_wrap(~name, scales = "free_x") +
+  theme_bw()
+```
+
+
+
+
+
+
+
+----------------------------------------------------------------------
+
+**I am going to show the ranges of t,z and w.**
+
+----------------------------------------------------------------------
+```{r}
+dfT <- newDF %>% select(t,z,w,m)
+
+dfT <- melt(dfT, id = c("m"))
+
+ggplot(dfT, aes(x = variable, y = value)) +            
+  geom_boxplot(mapping = aes(color = variable)) + 
+  facet_grid(~m)
+```
+As you can see w is a lot smaller than z and t.
+
+
+----------------------------------------------------------------------
+
+**Distribution of the output and the logit-transformed response.**
+
+----------------------------------------------------------------------
+```{r}
+newDF %>% ggplot(mapping = aes(x=output,y=y))+
+  geom_line()
+```
+
+----------------------------------------------------------------------
+**Making a corrplot of the inputs, to see which ones are related**
+----------------------------------------------------------------------
+
+```{r}
+newDF %>%
+  select(-m,-outcome) %>%
+  cor() %>%
+  corrplot::corrplot(type = 'upper', method = 'square',
+                     order = 'hclust', hclust.method = 'ward.D2')
+```
+
+As you can see, x5 is very highly negatively correlated with z. 
+
+```{r}
+data_range_machine_x <- newDF %>% 
+  select(-v1,-v2,-v3,-v4,-v5,-t,-z,-w,-output,-y) %>%
+  select(-outcome) %>%
+  tibble::rowid_to_column() %>%
+  pivot_longer(!c("rowid", "m"))
+data_range_machine_v <- newDF %>% 
+  select(-x1,-x2,-x3,-x4,-x5,-t,-z,-w,-output,-y) %>%
+  select(-outcome) %>%
+  tibble::rowid_to_column() %>%
+  pivot_longer(!c("rowid", "m"))
+data_range_machine_tzw <- newDF %>% 
+  select(-v1,-v2,-v3,-v4,-v5,-x1,-x2,-x3,-x4,-x5,-output,-y) %>%
+  select(-outcome) %>%
+  tibble::rowid_to_column() %>%
+  pivot_longer(!c("rowid", "m"))
+data_range_machine_output <- newDF %>% 
+  select(-v1,-v2,-v3,-v4,-v5,-x1,-x2,-x3,-x4,-x5,-t,-z,-w,-y) %>%
+  select(-outcome) %>%
+  tibble::rowid_to_column() %>%
+  pivot_longer(!c("rowid", "m"))
+```
+
+```{r}
+data_range_machine_v %>%
+  ggplot(mapping = aes(x = m, y = value, color = m)) +
+  geom_boxplot() +
+  facet_wrap(~name, scales = 'free')
+```
+```{r}
+data_range_machine_x %>%
+  ggplot(mapping = aes(x = m, y = value, color = m)) +
+  geom_boxplot() +
+  facet_wrap(~name, scales = 'free')
+```
+```{r}
+data_range_machine_tzw %>%
+  ggplot(mapping = aes(x = m, y = value, color = m)) +
+  geom_boxplot() +
+  facet_wrap(~name, scales = 'free')
+```
+
+```{r}
+data_range_machine_output %>%
+  ggplot(mapping = aes(x = m, y = value, color = m)) +
+  geom_boxplot() +
+  facet_wrap(~name, scales = 'free')
+```
+
+

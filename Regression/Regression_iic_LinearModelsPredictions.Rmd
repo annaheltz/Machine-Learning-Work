@@ -1,0 +1,225 @@
+---
+title: "Regression iic"
+author: "Anna Heltz"
+date: "2022-12-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE }
+library(tidyverse)
+library(caret)
+```
+
+
+```{r}
+DF <- readr::read_csv("fall2022_finalproject.csv", col_names = TRUE)
+```
+
+
+```{r}
+DF %>% glimpse()
+```
+
+
+----------------------------
+creating the DF in this file
+----------------------------
+
+```{r}
+newDF <- DF %>% 
+  mutate(x5 = 1 - (x1 + x2 + x3 + x4),
+         w = x2 / (x3 + x4),
+         z = (x1 + x2) / (x5 + x4),
+         t = v1 * v2,
+         outcome = ifelse(output < 0.33, 'event', 'non_event'),
+         outcome = factor(outcome, levels = c("event", "non_event")),
+          y = boot::logit(output))  
+```
+
+```{r}
+newDF %>% glimpse()
+```
+
+
+```{r}
+linearBasisMod3 <-  lm(y ~ splines::ns(x1, 5) * (I(x2^2)) * (I(x3^2))+ t + z + w , data = newDF)
+linearBasisMod3
+```
+
+```{r}
+linearBasisMod4 <-  lm(y ~ splines::ns(x1, 5) * splines::ns(z, 5)+ m , data = newDF)
+linearBasisMod4
+```
+
+-----------------------------------------
+**Lets make some predictions!**
+-----------------------------------------
+
+Lets see the the ranges of x1 and z together
+
+```{r}
+newDF %>% ggplot(mapping = aes(x=x1,y=z)) +
+  geom_point()
+```
+So we can see, that we should focus on values of z that are greater than 1.5 because we do not see any values for z that are less than 1 when x1 is between .4 and .6.
+Also, based on our EDA, we would like to focus on values for x1 that are between 0-0.05 and 0.3-0.6, and values for z that are between 0-1 and 3.5 to 5.
+
+
+
+**We will use the Bayesian Models to make the predictions**
+
+x1,x2,x3,t,z,w
+```{r}
+viz_grid_mod3<- expand.grid(x1 = seq(.3,.6, length.out = 6),
+                            z = seq(3.5,5, length.out = 6),
+                        x2 = seq(0,.3, length.out = 6),
+                         x3 = seq(.1,.5, length.out = 6),
+                         t = seq(0,10, length.out = 7),
+                         w = seq(0,1, length.out = 6),
+                        KEEP.OUT.ATTRS = FALSE,
+                        stringsAsFactors = FALSE) %>% 
+  as.data.frame() %>% tibble::as_tibble()
+```
+
+
+
+
+
+
+
+
+x1,z,m
+```{r}
+viz_grid_mod4<- expand.grid(x1 = seq(.3,.6, length.out = 6),
+                        z = seq(3.5,5, length.out = 20),
+                        m = c("A","B","C","D","E"),
+                        KEEP.OUT.ATTRS = FALSE,
+                        stringsAsFactors = FALSE) %>% 
+  as.data.frame() %>% tibble::as_tibble()
+```
+
+```{r}
+pred_df3 <- 0
+```
+
+```{r}
+tidy_predict3 <- function(mod, xnew)
+{
+  pred_df <- predict(mod, xnew, interval = "confidence") %>% 
+    as.data.frame() %>% tibble::as_tibble() %>% 
+    dplyr::select(pred = fit, ci_lwr = lwr, ci_upr = upr) %>% 
+    bind_cols(predict(mod, xnew, interval = 'prediction') %>% 
+                as.data.frame() %>% tibble::as_tibble() %>% 
+                dplyr::select(pred_lwr = lwr, pred_upr = upr))
+  
+  xnew %>% bind_cols(pred_df)
+}
+```
+
+```{r}
+pred_df4 <- 0
+```
+
+
+```{r}
+tidy_predict4 <- function(mod, xnew)
+{
+  pred_df <- predict(mod, xnew, interval = "confidence") %>% 
+    as.data.frame() %>% tibble::as_tibble() %>% 
+    dplyr::select(pred = fit, ci_lwr = lwr, ci_upr = upr) %>% 
+    bind_cols(predict(mod, xnew, interval = 'prediction') %>% 
+                as.data.frame() %>% tibble::as_tibble() %>% 
+                dplyr::select(pred_lwr = lwr, pred_upr = upr))
+  pred_df4 <- pred_df
+  
+  xnew %>% bind_cols(pred_df)
+}
+```
+
+```{r}
+pred_lm_03 <- tidy_predict3(linearBasisMod3, viz_grid_mod3)
+pred_lm_04 <- tidy_predict4(linearBasisMod4, viz_grid_mod4)
+```
+
+
+
+
+
+```{r}
+min(pred_lm_03$pred_lwr)
+max(pred_lm_03$pred_upr)
+min(pred_lm_03$ci_lwr)
+max(pred_lm_03$ci_upr)
+min(pred_lm_03$pred)
+max(pred_lm_03$pred)
+```
+```{r}
+min(pred_lm_04$pred_lwr)
+max(pred_lm_04$pred_upr)
+min(pred_lm_04$ci_lwr)
+max(pred_lm_04$ci_upr)
+min(pred_lm_04$pred)
+max(pred_lm_04$pred)
+```
+
+
+
+```{r}
+pred_lm_03 %>% 
+  ggplot(mapping = aes(x = z)) +
+  geom_ribbon(mapping = aes(ymin = pred_lwr, ymax = pred_upr),
+              fill = 'orange') +
+  geom_ribbon(mapping = aes(ymin = ci_lwr, ymax = ci_upr),
+              fill = 'grey') +
+  geom_line(mapping = aes(y = pred),
+            color = 'black') +
+  coord_cartesian(ylim = c(-1,2)) +
+  facet_wrap(~x1, labeller = "label_both") +
+  theme_bw()
+```
+
+```{r}
+pred_lm_04 %>% 
+  ggplot(mapping = aes(x = z)) +
+  geom_ribbon(mapping = aes(ymin = pred_lwr, ymax = pred_upr),
+              fill = 'orange') +
+  geom_ribbon(mapping = aes(ymin = ci_lwr, ymax = ci_upr),
+              fill = 'grey') +
+  geom_line(mapping = aes(y = pred),
+            color = 'black') +
+  coord_cartesian(ylim = c(-10,10)) +
+  facet_wrap(~x1, labeller = "label_both") +
+  theme_bw()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+pred_lm_03
+```
+```{r}
+pred_lm_04
+```
+**Are the predictive trends consistent between the 2 selected linear models?**
+As you can see from the visual, the predictive trends are not that consistent between the models. The first visual is very uncertain, and the second visual is more certain. The confidence and prediction intervals are a lot smaller on the second interval. They fit on the graph and you can see the difference between the intervals a lot better on the second interval. 
+
+
+
+
+
+
+
+
